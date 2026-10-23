@@ -1,0 +1,7 @@
+[2026-10-23 14:32:11] ERROR src/auth.ts:42
+TypeError: Cannot read properties of undefined (reading 'token')
+  at validateToken (src/auth.ts:42:15)
+  at loginHandler (src/routes/login.ts:18:3)
+
+[2026-10-23 14:32:15] WARN src/db.ts:89
+Connection pool exhausted, retrying...

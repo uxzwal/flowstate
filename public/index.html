@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#111827" />
+    <title>FlowState — PR Draft Copilot</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
+    <style>
+      body { background: #111827; }
+      ::selection { background: #0e7490; color: white; }
+    </style>
+  </head>
+  <body class="min-h-screen bg-gray-900 text-white antialiased">
+    <div id="root"></div>
+    <script type="text/babel">
+      const { useEffect, useRef, useState } = React;
+
+      function App() {
+        const [messages, setMessages] = useState([
+          {
+            role: "assistant",
+            text: "I can inspect your current Git context and demo error logs, then draft a pull request. Try **Draft a PR for my current work**.",
+          },
+        ]);
+        const [input, setInput] = useState("");
+        const [toolCalls, setToolCalls] = useState([]);
+        const [loading, setLoading] = useState(false);
+        const [error, setError] = useState("");
+        const scrollRef = useRef(null);
+
+        useEffect(() => {
+          scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+        }, [messages, toolCalls, loading]);
+
+        async function submitMessage(event) {
+          event.preventDefault();
+          const message = input.trim();
+          if (!message || loading) return;
+
+          setMessages((current) => [...current, { role: "user", text: message }]);
+          setInput("");
+          setToolCalls([]);
+          setError("");
+          setLoading(true);
+
+          try {
+            const response = await fetch("/api/chat/stream", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ message }),
+            });
+            if (!response.ok) {
+              const result = await response.json();
+              throw new Error(result.error || "The request failed.");
+            }
+            if (!response.body) throw new Error("Streaming is not available in this browser.");
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = "";
+            let completed = false;
+
+            while (true) {
+              const { value, done } = await reader.read();
+              buffer += decoder.decode(value, { stream: !done });
+              let boundary = buffer.indexOf("\n\n");
+
+              while (boundary !== -1) {
+                const frame = buffer.slice(0, boundary);
+                buffer = buffer.slice(boundary + 2);
+                const data = frame.split("\n").find((line) => line.startsWith("data: "));
+                if (data) {
+                  const event = JSON.parse(data.slice(6));
+                  if (event.type === "tool") {
+                    setToolCalls((current) => {
+                      const existing = current.findIndex((call) => call.name === event.toolCall.name);
+                      if (existing === -1) return [...current, event.toolCall];
+                      return current.map((call, index) => index === existing ? event.toolCall : call);
+                    });
+                  } else if (event.type === "complete") {
+                    completed = true;
+                    setMessages((current) => [...current, { role: "assistant", text: event.response }]);
+                  } else if (event.type === "error") {
+                    throw new Error(event.error || "The request failed.");
+                  }
+                }
+                boundary = buffer.indexOf("\n\n");
+              }
+              if (done) break;
+            }
+            if (!completed) throw new Error("The server ended the stream before returning a draft.");
+          } catch (requestError) {
+            setError(requestError.message || "Unable to reach FlowState.");
+          } finally {
+            setLoading(false);
+          }
+        }
+
+        return (
+          <main className="mx-auto flex min-h-screen max-w-6xl flex-col px-4 py-6 sm:px-6 lg:px-8">
+            <header className="mb-6 flex items-center justify-between border-b border-gray-800 pb-5">
+              <div className="flex items-center gap-3">
+                <div className="grid h-10 w-10 place-items-center rounded-xl bg-cyan-400/10 text-xl text-cyan-300">↗</div>
+                <div>
+                  <h1 className="text-lg font-semibold tracking-tight">FlowState</h1>
+                  <p className="text-xs text-gray-400">Context-aware PR copilot</p>
+                </div>
+              </div>
+              <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-300">● Local demo</span>
+            </header>
+
+            <div className="grid flex-1 gap-5 lg:grid-cols-[minmax(0,1fr)_300px]">
+              <section className="flex min-h-[70vh] flex-col overflow-hidden rounded-2xl border border-gray-800 bg-gray-950/50 shadow-2xl shadow-black/20">
+                <div className="flex items-center justify-between border-b border-gray-800 px-5 py-4">
+                  <div>
+                    <h2 className="font-medium">PR workspace</h2>
+                    <p className="mt-0.5 text-xs text-gray-500">Your local context stays on this machine.</p>
+                  </div>
+                  <span className="text-xs text-gray-500">MCP tools enabled</span>
+                </div>
+
+                <div ref={scrollRef} className="flex-1 space-y-5 overflow-y-auto px-4 py-6 sm:px-6">
+                  {messages.map((message, index) => (
+                    <div key={index} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
+                      <div className={`max-w-[90%] rounded-2xl px-4 py-3 ${message.role === "user" ? "bg-cyan-700 text-white" : "border border-gray-800 bg-gray-900 text-gray-200"}`}>
+                        <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400">
+                          {message.role === "user" ? "You" : "FlowState"}
+                        </div>
+                        {message.role === "assistant" ? (
+                          <div
+                            className="prose prose-invert prose-sm max-w-none prose-headings:text-white prose-a:text-cyan-300"
+                            dangerouslySetInnerHTML={{
+                              __html: DOMPurify.sanitize(marked.parse(message.text)),
+                            }}
+                          />
+                        ) : (
+                          <p className="whitespace-pre-wrap text-sm">{message.text}</p>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+
+                  {loading && (
+                    <div className="flex justify-start">
+                      <div className="rounded-2xl border border-gray-800 bg-gray-900 px-4 py-3 text-sm text-gray-300">
+                        <span className="mr-2 inline-block animate-pulse text-cyan-300">●</span>
+                        Inspecting Git and logs, then drafting your PR…
+                      </div>
+                    </div>
+                  )}
+                  {error && <p role="alert" className="rounded-xl border border-red-900 bg-red-950/50 px-4 py-3 text-sm text-red-300">{error}</p>}
+                </div>
+
+                <form onSubmit={submitMessage} className="border-t border-gray-800 p-4 sm:p-5">
+                  <label htmlFor="message" className="sr-only">Message</label>
+                  <div className="flex gap-3">
+                    <input
+                      id="message"
+                      value={input}
+                      onChange={(event) => setInput(event.target.value)}
+                      placeholder="Draft a PR for my current work…"
+                      className="min-w-0 flex-1 rounded-xl border border-gray-700 bg-gray-900 px-4 py-3 text-sm text-white outline-none placeholder:text-gray-500 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20"
+                      disabled={loading}
+                    />
+                    <button
+                      type="submit"
+                      disabled={loading || !input.trim()}
+                      className="rounded-xl bg-cyan-500 px-5 py-3 text-sm font-semibold text-gray-950 transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {loading ? "Working…" : "Draft PR"}
+                    </button>
+                  </div>
+                  <p className="mt-2 text-xs text-gray-500">Never include secrets in your prompt.</p>
+                </form>
+              </section>
+
+              <aside className="space-y-5">
+                <section className="rounded-2xl border border-gray-800 bg-gray-950/50 p-5">
+                  <div className="mb-4 flex items-center justify-between">
+                    <h2 className="font-medium">Tool call trace</h2>
+                    <span className="text-xs text-gray-500">{toolCalls.length} / 3</span>
+                  </div>
+                  {toolCalls.length ? (
+                    <ol className="space-y-4">
+                      {toolCalls.map((call, index) => (
+                        <li key={`${call.name}-${index}`} className="flex gap-3">
+                          <span className={`mt-0.5 ${call.status === "complete" ? "text-emerald-400" : "animate-pulse text-cyan-300"}`}>
+                            {call.status === "complete" ? "✓" : "●"}
+                          </span>
+                          <div>
+                            <p className="font-mono text-xs text-cyan-200">{call.name}</p>
+                            <p className="mt-1 text-xs leading-relaxed text-gray-400">{call.summary}</p>
+                          </div>
+                        </li>
+                      ))}
+                    </ol>
+                  ) : (
+                    <p className="text-sm leading-relaxed text-gray-500">Tool activity will appear here after you request a draft.</p>
+                  )}
+                </section>
+
+                <section className="rounded-2xl border border-gray-800 bg-gradient-to-br from-cyan-950/60 to-gray-950 p-5">
+                  <p className="text-xs font-semibold uppercase tracking-widest text-cyan-300">Ready when you are</p>
+                  <h2 className="mt-2 text-lg font-semibold">Review your next PR draft</h2>
+                  <p className="mt-2 text-sm leading-relaxed text-gray-400">Use your branch, commits, staged files, and demo log context to create a useful first draft.</p>
+                  <button type="button" className="mt-5 w-full rounded-xl bg-white px-4 py-3 text-sm font-semibold text-gray-950 shadow-lg shadow-cyan-950/30">
+                    Book a review
+                  </button>
+                  <p className="mt-2 text-center text-[11px] text-gray-600">Visual demo button — no booking is created.</p>
+                </section>
+              </aside>
+            </div>
+
+            <footer className="pt-5 text-center text-xs text-gray-600">FlowState · Local development context, never a substitute for review.</footer>
+          </main>
+        );
+      }
+
+      ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+    </script>
+  </body>
+</html>

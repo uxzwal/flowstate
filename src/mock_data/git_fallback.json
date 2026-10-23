@@ -1,0 +1,6 @@
+{
+  "branch": "feature/auth-fix",
+  "commits": "a1b2c3d fix: auth middleware\ne4f5g6h feat: add login\ni7j8k9l chore: setup",
+  "staged": "src/auth.ts\nsrc/middleware.ts",
+  "source": "fallback"
+}
